@@ -26,6 +26,7 @@ function SupplierPayments() {
     payment_mode: "bank" as "cash"|"bank"|"upi"|"cheque"|"credit",
     reference: "",
   });
+  const [waitingForBankPayment, setWaitingForBankPayment] = useState(false);
 
   const { data: suppliers } = useQuery({ queryKey: ["suppliers"], queryFn: async () => (await supabase.from("suppliers").select("*").order("outstanding",{ascending:false})).data ?? [] });
   const { data: recent } = useQuery({ queryKey: ["recent-supplier-payments"], queryFn: async () => (await supabase.from("supplier_payments").select("*, suppliers(name)").order("created_at",{ascending:false}).limit(10)).data ?? [] });
@@ -46,20 +47,62 @@ function SupplierPayments() {
       });
       if (error) throw error;
     },
-    onSuccess: () => { toast.success("Payment recorded"); qc.invalidateQueries(); setForm({ ...form, amount: "", reference: "" }); },
-    onError: (e: any) => toast.error(e.message),
+    onSuccess: () => { 
+      toast.success("Payment recorded"); 
+      qc.invalidateQueries(); 
+      setForm({ ...form, amount: "", reference: "" }); 
+      setWaitingForBankPayment(false);
+    },
+    onError: (e: any) => {
+      toast.error(e.message);
+      setWaitingForBankPayment(false);
+    },
   });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!form.supplier_id) {
+      toast.error("Select supplier");
+      return;
+    }
+    
+    const amt = +form.amount;
+    if (!amt || amt <= 0) {
+      toast.error("Amount must be positive");
+      return;
+    }
+
+    // If payment mode is bank, redirect to SBI internet banking
+    if (form.payment_mode === "bank") {
+      setWaitingForBankPayment(true);
+      toast.info("Opening SBI internet banking login...");
+      // Redirect to SBI internet banking login page
+      window.open("https://www.onlinesbi.sbi/", "_blank");
+      // After opening SBI, the user can complete payment and return
+      toast.success("Please login to SBI and complete the payment. Return and click 'Complete Payment' to record it.");
+    } else {
+      create.mutate();
+    }
+  };
 
   return (
     <div className="max-w-6xl mx-auto">
       <PageHeader title="Supplier Payments" description="Pay suppliers. Outstanding payable auto-reduces." />
       <div className="grid lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2 p-6">
-          <form onSubmit={(e)=>{e.preventDefault(); create.mutate();}} className="grid sm:grid-cols-2 gap-4">
-            <div className="space-y-2"><Label>Date</Label><Input type="date" value={form.payment_date} onChange={(e)=>setForm({...form, payment_date: e.target.value})}/></div>
+          <form onSubmit={handleSubmit} className="grid sm:grid-cols-2 gap-4">
+            {waitingForBankPayment && (
+              <div className="col-span-2 rounded-lg border border-blue-200 bg-blue-50 p-3 mb-2">
+                <p className="text-sm font-medium text-blue-900">Bank payment in progress</p>
+                <p className="text-xs text-blue-700 mt-1">Complete your payment on SBI internet banking, then click "Complete Payment" to save the transaction.</p>
+              </div>
+            )}
+            
+            <div className="space-y-2"><Label>Date</Label><Input type="date" value={form.payment_date} onChange={(e)=>setForm({...form, payment_date: e.target.value})} disabled={waitingForBankPayment}/></div>
             <div className="space-y-2">
               <Label>Payment Mode</Label>
-              <Select value={form.payment_mode} onValueChange={(v: any)=>setForm({...form, payment_mode: v})}>
+              <Select value={form.payment_mode} onValueChange={(v: any)=>setForm({...form, payment_mode: v})} disabled={waitingForBankPayment}>
                 <SelectTrigger><SelectValue/></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cash">Cash</SelectItem>
@@ -71,15 +114,33 @@ function SupplierPayments() {
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label>Supplier</Label>
-              <Select value={form.supplier_id} onValueChange={(v)=>setForm({...form, supplier_id: v})}>
+              <Select value={form.supplier_id} onValueChange={(v)=>setForm({...form, supplier_id: v})} disabled={waitingForBankPayment}>
                 <SelectTrigger><SelectValue placeholder="Select supplier"/></SelectTrigger>
                 <SelectContent>{(suppliers ?? []).map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name} — {inr(s.outstanding)}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             {selected && <div className="sm:col-span-2 rounded-md border bg-muted/40 px-3 py-2 text-xs font-mono flex justify-between"><span>PAYABLE</span><span className="font-semibold">{inr(selected.outstanding)}</span></div>}
-            <div className="space-y-2"><Label>Amount Paid (₹)</Label><Input type="number" step="0.01" value={form.amount} onChange={(e)=>setForm({...form, amount: e.target.value})} required/></div>
-            <div className="space-y-2"><Label>Reference / Cheque No.</Label><Input value={form.reference} onChange={(e)=>setForm({...form, reference: e.target.value})}/></div>
-            <div className="sm:col-span-2"><Button type="submit" size="lg" className="w-full" disabled={create.isPending}>{create.isPending ? "Saving..." : "Record Payment"}</Button></div>
+            <div className="space-y-2"><Label>Amount Paid (₹)</Label><Input type="number" step="0.01" value={form.amount} onChange={(e)=>setForm({...form, amount: e.target.value})} required disabled={waitingForBankPayment}/></div>
+            <div className="space-y-2"><Label>Reference / Cheque No.</Label><Input value={form.reference} onChange={(e)=>setForm({...form, reference: e.target.value})} disabled={waitingForBankPayment}/></div>
+            
+            {form.payment_mode === "bank" ? (
+              <div className="sm:col-span-2 flex gap-2">
+                {!waitingForBankPayment ? (
+                  <Button type="submit" size="lg" className="w-full bg-green-600 hover:bg-green-700">Pay Now</Button>
+                ) : (
+                  <>
+                    <Button type="button" size="lg" className="w-full" onClick={() => create.mutate()} disabled={create.isPending}>
+                      {create.isPending ? "Recording…" : "Complete Payment"}
+                    </Button>
+                    <Button type="button" size="lg" className="w-full" variant="outline" onClick={() => setWaitingForBankPayment(false)}>
+                      Cancel
+                    </Button>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="sm:col-span-2"><Button type="submit" size="lg" className="w-full" disabled={create.isPending}>{create.isPending ? "Saving..." : "Record Payment"}</Button></div>
+            )}
           </form>
         </Card>
         <Card className="p-5 h-fit">

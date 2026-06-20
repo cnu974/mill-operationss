@@ -113,6 +113,7 @@ function PayDialog({ mode, row }: { mode: "pay" | "receive"; row: any }) {
     payment_mode: "cash" as typeof MODES[number],
     reference: "",
   });
+  const [waitingForBankPayment, setWaitingForBankPayment] = useState(false);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -131,9 +132,42 @@ function PayDialog({ mode, row }: { mode: "pay" | "receive"; row: any }) {
       toast.success(mode === "pay" ? "Payment recorded" : "Receipt recorded");
       qc.invalidateQueries();
       setOpen(false);
+      setWaitingForBankPayment(false);
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => {
+      toast.error(e.message);
+      setWaitingForBankPayment(false);
+    },
   });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = +f.amount;
+    if (!amt || amt <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+
+    // If payment mode is bank, redirect to SBI internet banking
+    if (f.payment_mode === "bank") {
+      setWaitingForBankPayment(true);
+      toast.info("Opening SBI internet banking login...");
+      // Redirect to SBI internet banking login page
+      window.open("https://www.onlinesbi.sbi/", "_blank");
+      // After opening SBI, the user can complete payment and return
+      // Show instructions for the user
+      toast.success("Please login to SBI and complete the payment. Return to record payment details when done.");
+    } else {
+      save.mutate();
+    }
+  };
+
+  const handleRecordAfterBankPayment = () => {
+    // This records the payment after user has completed SBI payment
+    if (f.payment_mode === "bank") {
+      save.mutate();
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -145,7 +179,15 @@ function PayDialog({ mode, row }: { mode: "pay" | "receive"; row: any }) {
         <div className="text-xs text-muted-foreground mb-4">
           {mode === "pay" ? row.supplier_name : row.customer_name} · Outstanding <span className="font-mono">{inr(row.outstanding)}</span>
         </div>
-        <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }} className="space-y-3">
+        
+        {waitingForBankPayment && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 mb-4">
+            <p className="text-sm font-medium text-blue-900">Bank payment in progress</p>
+            <p className="text-xs text-blue-700 mt-1">Complete your payment on SBI internet banking, then click "Record Payment" to save the transaction.</p>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1"><Label>Date</Label><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
             <div className="space-y-1"><Label>Amount</Label><Input type="number" step="0.01" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} required /></div>
@@ -153,14 +195,37 @@ function PayDialog({ mode, row }: { mode: "pay" | "receive"; row: any }) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label>Mode</Label>
-              <Select value={f.payment_mode} onValueChange={(v: any) => setF({ ...f, payment_mode: v })}>
+              <Select value={f.payment_mode} onValueChange={(v: any) => setF({ ...f, payment_mode: v })} disabled={waitingForBankPayment}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{MODES.map((m) => <SelectItem key={m} value={m} className="capitalize">{m}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-1"><Label>Reference</Label><Input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="Cheque #, UPI ref, …" /></div>
           </div>
-          <Button type="submit" className="w-full" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save"}</Button>
+          
+          {f.payment_mode === "bank" ? (
+            <div className="flex gap-2">
+              <Button 
+                type="submit" 
+                className="w-full bg-green-600 hover:bg-green-700"
+                disabled={save.isPending || !waitingForBankPayment}
+              >
+                {save.isPending ? "Recording…" : waitingForBankPayment ? "Record Payment" : "Pay Now"}
+              </Button>
+              {!waitingForBankPayment && (
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  className="w-full"
+                  onClick={() => setOpen(false)}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+          ) : (
+            <Button type="submit" className="w-full" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save"}</Button>
+          )}
         </form>
       </DialogContent>
     </Dialog>
